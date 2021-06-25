@@ -6,6 +6,7 @@ if sys.argv[1:]:
   LISTENING_PORT = sys.argv[1]
 else:
   LISTENING_PORT = 2052
+  LISTENING_PORT = 2053
 #Pass
 PASS = ''
 
