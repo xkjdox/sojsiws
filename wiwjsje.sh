@@ -1,4 +1,5 @@
 #!/bin/sh
+UUID=$(cat /proc/sys/kernel/random/uuid)
 
 # Download and install xray
 mkdir /tmp/xray
@@ -18,7 +19,7 @@ cat << EOF > /usr/local/etc/xray/config.json
   },
   "inbounds": [
     {
-      "port": $PORT,
+      "port": 3443,
       "protocol": "VLESS",
       "settings": {
         "clients": [
@@ -32,7 +33,7 @@ cat << EOF > /usr/local/etc/xray/config.json
       "streamSettings": {
         "network": "ws",
         "wsSettings": {
-          "path": "/app"
+          "path": "/william"
         }
       }
     }
