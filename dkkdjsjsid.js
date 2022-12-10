@@ -112,7 +112,7 @@ server.on('connection', function(socket) {
 
     var packetCount = 0;
 
-    var anu = "Script By @onevpn_us";
+    var anu = "Script By @belivpn";
 
     //var handshakeMade = false;
 
