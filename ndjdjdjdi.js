@@ -1,7 +1,7 @@
 /*
-* Proxy Bridge
-* Copyright PANCHO7532 - P7COMUnications LLC (c) 2021
-* Dedicated to Emanuel Miranda, for giving me the idea to make this :v
+* Jembatan Proksi
+* Hak Cipta PANCHO7532 - P7COMUnications LLC (c) 2021
+* Didedikasikan untuk Emanuel Miranda, karena telah memberi saya ide untuk membuat ini :v
 */
 const net = require('net');
 const stream = require('stream');
@@ -11,8 +11,7 @@ var dport = "109";
 var mainPort = "2052";
 var outputFile = "outputFile.txt";
 var packetsToSkip = 0;
-var gcwarn = true;
-for(c = 0; c < process.argv.length; c++) {
+for (c = 0; c < process.argv.length; c++) {
     switch(process.argv[c]) {
         case "-skip":
             packetsToSkip = process.argv[c + 1];
@@ -31,91 +30,116 @@ for(c = 0; c < process.argv.length; c++) {
             break;
     }
 }
-function gcollector() {
-    if(!global.gc && gcwarn) {
-        console.log("[WARNING] Garbage Collector isn't enabled! Memory leaks may occur.");
-        gcwarn = false;
-        return;
-    } else if(global.gc) {
-        global.gc();
-        return;
-    } else {
-        return;
-    }
-}
 function parseRemoteAddr(raddr) {
-    if(raddr.toString().indexOf("ffff") != -1) {
-        //is IPV4 address
+    if (raddr.toString().indexOf("ffff") != -1) {
         return raddr.substring(7, raddr.length);
     } else {
         return raddr;
     }
 }
-setInterval(gcollector, 1000);
+const activeConnections = new Set();
+let lastRemoteErrorLog = 0;
+const logInterval = 60000; // Log kesalahan [REMOTE] setiap 60 detik
+setInterval(() => {
+    const memoryUsage = process.memoryUsage();
+    if (memoryUsage.heapUsed > 100 * 1024 * 1024) { // Ambang batas 100MB
+        console.warn("[MEM] Penggunaan memori tinggi: " + (memoryUsage.heapUsed / 1024 / 1024).toFixed(2) + " MB");
+        if (global.gc) {
+            global.gc();
+            console.warn("[MEM] Global garbage collector dipanggil untuk mengurangi memori");
+        } else {
+            console.warn("[MEM] Global.gc tidak tersedia, jalankan dengan --expose-gc untuk pengelolaan memori");
+        }
+        activeConnections.forEach(conn => {
+            if (!conn.writable || !conn.readable) {
+                conn.destroy();
+                activeConnections.delete(conn);
+            }
+        });
+    }
+}, 60000); // Periksa setiap 60 detik
 const server = net.createServer();
 server.on('connection', function(socket) {
     var packetCount = 0;
-    //var handshakeMade = false;
     var anu = "SCRIPT BY t.me/user_legend";
     socket.write("HTTP/1.1 101 " + anu.fontcolor("green") + "\r\nUpgrade: websocket\r\n\r\nSec-WebSocket-Accept: foo\r\n\r\n", function(err) {
         if(err) {
             console.log("[SWRITE] Failed to write response to " + socket.remoteAddress + ":" + socket.remotePort + ", error: " + err);
+            socket.destroy();
         }
     });
-    console.log("[INFO] Connection received from " + socket.remoteAddress + ":" + socket.remotePort);
     var conn = net.createConnection({host: dhost, port: dport});
+    // Set timeout koneksi (30 detik) untuk mencegah koneksi macet
+    conn.setTimeout(30000, () => {
+        conn.destroy();
+        activeConnections.delete(conn);
+    });
+    activeConnections.add(conn);
     socket.on('data', function(data) {
-        //pipe sucks
-        if(packetCount < packetsToSkip) {
-            //console.log("---c1");
+        if (packetCount < packetsToSkip) {
             packetCount++;
-        } else if(packetCount == packetsToSkip) {
-            //console.log("---c2");
-            conn.write(data, function(err) {
-                if(err) {
-                    console.log("[EWRITE] Failed to write to external socket! - " + err);
-                }
-            });
+        } else if (packetCount == packetsToSkip) {
+            if (conn.writable) { // Periksa apakah koneksi masih valid
+                conn.write(data, function(err) {
+                    if(err) {
+                        console.log("[EWRITE] Failed to write to external socket! - " + err);
+                        conn.destroy();
+                        activeConnections.delete(conn);
+                    }
+                });
+                packetCount++;
+            } else {
+                conn.destroy();
+                activeConnections.delete(conn);
+            }
+        } else {
+            if (conn.writable) { // Periksa apakah koneksi masih valid
+                conn.write(data);
+            } else {
+                conn.destroy();
+                activeConnections.delete(conn);
+            }
         }
-        if(packetCount > packetsToSkip) {
-            //console.log("---c3");
-            packetCount = packetsToSkip;
-        }
-        //conn.write(data);
     });
     conn.on('data', function(data) {
-        //pipe sucks x2
         socket.write(data, function(err) {
             if(err) {
                 console.log("[SWRITE2] Failed to write response to " + socket.remoteAddress + ":" + socket.remotePort + ", error: " + err);
+                socket.destroy();
             }
         });
-    });
-    socket.once('data', function(data) {
-        /*
-        * Nota para mas tarde, resolver que diferencia hay entre .on y .once
-        */
     });
     socket.on('error', function(error) {
         console.log("[SOCKET] read " + error + " from " + socket.remoteAddress + ":" + socket.remotePort);
         conn.destroy();
-    });
-    conn.on('error', function(error) {
-        console.log("[REMOTE] read " + error);
+        activeConnections.delete(conn);
         socket.destroy();
     });
-    socket.on('close', function() {
-        console.log("[INFO] Connection terminated for " + socket.remoteAddress + ":" + socket.remotePort);
+    conn.on('error', function(error) {
+        // Batasi logging kesalahan [REMOTE] untuk mengurangi I/O
+        if (Date.now() - lastRemoteErrorLog > logInterval) {
+            console.log("[REMOTE] read " + error);
+            lastRemoteErrorLog = Date.now();
+        }
+        socket.destroy();
         conn.destroy();
+        activeConnections.delete(conn);
+    });
+    socket.on('close', function() {
+        conn.destroy();
+        activeConnections.delete(conn);
+        socket.destroy();
+    });
+    conn.on('close', function() {
+        activeConnections.delete(conn);
     });
 });
 server.on("error", function(error) {
     console.log("[SRV] Error " + error + ", this may be unrecoverable");
 });
 server.on("close", function() {
-    //conection closed idk, maybe i should not capture this
+    //koneksi ditutup entahlah, mungkin saya sebaiknya tidak menangkap ini
 });
 server.listen(mainPort, function(){
     console.log("[INFO] Server started on port: " + mainPort);
-    console.log("[INFO] Redirecting requests to: " + dhost + " at port " + dport);
 });
